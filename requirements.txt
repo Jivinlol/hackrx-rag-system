@@ -2,13 +2,9 @@ fastapi
 uvicorn[standard]
 groq
 sentence-transformers
-torch==2.5.1+cpu
---extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
 faiss-cpu
 PyPDF2
 python-docx
-requests
 python-dotenv
 numpy
-tqdm            # (optional) progress bars for large downloads / embedding
-httpx           # async HTTP client, useful if utils are upgraded for async fetching
