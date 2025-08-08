@@ -1,16 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
-import numpy as np, os
+import numpy as np, os, asyncio
 from dotenv import load_dotenv
 from groq import Groq
-
 from utils import (
     download_file, extract_text, chunk_text,
     embed_texts, embed_single, build_faiss
 )
 
 load_dotenv()
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise RuntimeError("Please set GROQ_API_KEY in .env")
@@ -21,7 +21,7 @@ app = FastAPI(title="HackRx RAG System")
 
 # ---------- API Schemas ----------
 class HackRxRequest(BaseModel):
-    documents: str                    # single URL for this challenge
+    documents: str  # single URL for this challenge
     questions: List[str]
 
 class HackRxResponse(BaseModel):
@@ -29,21 +29,19 @@ class HackRxResponse(BaseModel):
 
 # ---------- Endpoint -------------
 @app.post("/hackrx/run", response_model=HackRxResponse)
-def run_submission(payload: HackRxRequest):
+async def run_submission(payload: HackRxRequest):
     try:
         # 1) Fetch & read the document -------------------
-        local_path = download_file(payload.documents)
-        full_text  = extract_text(local_path)
+        local_path = await asyncio.to_thread(download_file, payload.documents)
+        full_text  = await asyncio.to_thread(extract_text, local_path)
 
         # 2) Split & embed -------------------------------
         chunks = chunk_text(full_text, chunk_size=600, overlap=75)
-        chunk_emb = embed_texts(chunks)
+        chunk_emb = await asyncio.to_thread(embed_texts, chunks)
         index = build_faiss(chunk_emb)
 
-        answers = []
-
-        # 3) Loop over questions -------------------------
-        for q in payload.questions:
+        # 3) Function to answer a single question --------
+        async def answer_question(q: str) -> str:
             q_emb = np.array([embed_single(q)], dtype="float32")
             _, idx = index.search(q_emb, k=3)
             context = "\n---\n".join([chunks[i] for i in idx[0]])
@@ -55,14 +53,18 @@ def run_submission(payload: HackRxRequest):
                 f"Question: {q}\nAnswer:"
             )
 
-            resp = groq_client.chat.completions.create(
+            # Call Groq API in a thread (blocking I/O)
+            resp = await asyncio.to_thread(
+                groq_client.chat.completions.create,
                 model="llama3-8b-8192",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=400
             )
-            answer = resp.choices[0].message.content.strip()
-            answers.append(answer)
+            return resp.choices[0].message.content.strip()
+
+        # 4) Answer all questions in parallel ------------
+        answers = await asyncio.gather(*[answer_question(q) for q in payload.questions])
 
         return {"answers": answers}
 
